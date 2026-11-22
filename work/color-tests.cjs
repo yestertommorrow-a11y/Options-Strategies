@@ -1,0 +1,21 @@
+const fs=require('fs'),vm=require('vm'),assert=require('assert');
+const html=fs.readFileSync('outputs/optionstrat_color_lab.html','utf8');
+const ctx=vm.createContext({formatCurrency:v=>new Intl.NumberFormat('en-US',{style:'currency',currency:'USD'}).format(v)});
+const enums=html.slice(html.indexOf('      const OptionType'),html.indexOf('      /*',html.indexOf('      const OptionType')));
+const core=html.slice(html.indexOf('      function cdf'),html.indexOf('      const formatCurrency'));
+const scenarios=html.slice(html.indexOf('      const LEG_COLORS'),html.indexOf('      const ScenarioLab'));
+vm.runInContext(enums+core+scenarios+';globalThis.matrix=buildScenarioMatrix;globalThis.legPL=calculateLegProfit;globalThis.csv=scenarioCSV;globalThis.chart=buildColorChartData;globalThis.signed=signedCurrency;',ctx);
+const leg={type:'Call',action:'Buy',strike:100,expiry:30,iv:20,contracts:1,price:5};
+const results=[];function test(name,fn){try{fn();results.push({name,pass:true})}catch(e){results.push({name,pass:false,error:e.message})}}
+test('Long-call expiration scenario matches known payoff',()=>{const m=ctx.matrix([leg],100);assert.equal(m.rows.find(r=>r.move===.2).values.at(-1),1500)});
+test('Scenario dates never exceed first expiry',()=>{const m=ctx.matrix([leg,{...leg,expiry:60}],100);assert.equal(m.horizon,30);assert(m.days.every(d=>d<=30))});
+test('Zero-day horizon has no duplicate columns',()=>assert.equal(ctx.matrix([{...leg,expiry:0}],100).days.length,1));
+test('Empty strategy matrix finite and zero',()=>assert(ctx.matrix([],100).rows.every(r=>r.values.every(v=>v===0))));
+test('Zero volatility scenario remains finite',()=>assert(ctx.matrix([{...leg,iv:0}],100).rows.every(r=>r.values.every(Number.isFinite))));
+test('Scenario aggregate equals individual leg contributions',()=>{const legs=[leg,{...leg,action:'Sell',strike:110,price:2}];const m=ctx.matrix(legs,100);m.rows.forEach(r=>m.days.forEach((d,i)=>assert(Math.abs(r.values[i]-legs.reduce((v,l)=>v+ctx.legPL(l,r.spot,d,0),0))<1e-8)))});
+test('Exactly seven price scenarios',()=>assert.equal(ctx.matrix([leg],100).rows.length,7));
+test('CSV has header plus seven rows and correct time columns',()=>{const m=ctx.matrix([leg],100);const lines=ctx.csv(m).split('\r\n');assert.equal(lines.length,8);lines.forEach(line=>assert.equal(line.split(',').length,2+m.days.length));assert(lines[0].includes('T+30 P/L USD'));assert(lines[7].includes('1500.00'))});
+test('Signed values include plus and suppress negative zero',()=>{assert.equal(ctx.signed(1),'+$1.00');assert.equal(ctx.signed(-1),'-$1.00');assert.equal(ctx.signed(-.001),'$0.00')});
+test('Chart shading splits at exact breakeven',()=>{const rows=ctx.chart([{...leg,price:5.13}],100,0,0);assert(rows.some(r=>Math.abs(r.price-105.13)<1e-6&&r.expiryPL===0));assert(rows.every(r=>r.profitFill>=0&&r.lossFill<=0));assert(rows.every(r=>Math.abs(r.profitFill+r.lossFill-r.expiryPL)<1e-8))});
+test('Per-leg curves sum to modeled total at every chart point',()=>{const rows=ctx.chart([leg,{...leg,action:'Sell',strike:110,price:2}],100,5,3);rows.forEach(r=>assert(Math.abs(r.leg0+r.leg1-r.currentPL)<.011))});
+fs.writeFileSync('outputs/color-lab-scenario-tests.json',JSON.stringify(results,null,2));console.log(results);if(results.some(r=>!r.pass))process.exitCode=1;

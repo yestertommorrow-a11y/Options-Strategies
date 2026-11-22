@@ -1,0 +1,29 @@
+# Published: the app, its tests, the review notes, README and Pages entry.
+# Kept local only (history, backups, generated output, large vendor file, local tooling):
+
+# Review handoff (local paths) and copy manifest
+CLAUDE_REVIEW.txt
+copy-manifest.json
+
+# Earlier revisions / backups and old reports
+outputs/optionstrat_color_lab_before_completion.html
+outputs/optionstrat_color_lab_before_priorities.html
+outputs/optionstrat_pro_fixed.html
+outputs/persistence-tests.cjs
+outputs/regression-tests.cjs
+outputs/review-and-improvements.md
+outputs/test-results.json
+
+# Generated test results (re-created by run-review-checks.cjs)
+outputs/*-tests.json
+
+# Original baseline, historical patch scripts, generated compile output, vendor download
+work/original.html
+work/*.py
+work/compiled-app.mjs
+work/babel.min.cjs
+work/lifecycle-tests.cjs
+work/test.cjs
+
+# Local tooling
+.claude/

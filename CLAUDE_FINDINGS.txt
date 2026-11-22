@@ -1,0 +1,965 @@
+CLAUDE INDEPENDENT REVIEW — outputs/optionstrat_color_lab.html (2,348 lines at review time)
+Review date: 2026-11-22. Reviewer: Claude (Claude Code).
+Line numbers in sections A–E refer to the file AS REVIEWED, before the fixes below. The fixes
+added about 40 lines, so later line numbers have moved.
+
+======================================================================
+FIX STATUS (applied 2026-11-22 at the user's request: F1–F3 only)
+======================================================================
+F1 FIXED. atmIvFromChain now takes an explicit `expectedSymbol` argument and no longer reads
+   App's `symbol`. handleYahooFetch passes `sym`.
+F2 FIXED. loadSavedStrategy (which import also uses) sets `previousSymbolRef.current = saved.symbol`.
+   Refreshing the loaded ticker keeps the loaded legs. Fetching a different ticker still rebuilds,
+   which is the existing behavior.
+F3 FIXED.
+   - New module helper parseStoredStrategies validates each entry on its own and keeps the valid ones.
+   - If any entry is invalid, or the stored JSON is unreadable or not an array, the untouched
+     original is copied to localStorage key "optionstrat_saved_strategies_backup" before the main
+     key is rewritten.
+   - A dismissible notice above Saved Strategies says how many entries were skipped.
+   - saveCurrentStrategy now runs validateStrategyImport before asking for a name and refuses
+     (with an alert) anything the loader would reject: 0 or more than 40 legs, IV over 500, DTE
+     over 3650, and so on.
+   The builder inputs still accept values beyond the import bounds; such strategies just cannot
+   be saved.
+
+Second pass (2026-11-22, user request "Fix F4–F8"):
+F4 FIXED. Enabling persistence now MERGES: session strategies are kept, and stored ones whose id
+   is not already in the session are appended. A session copy wins on an id collision. The merged
+   list is then persisted. parseStoredStrategies keeps each entry's original id (only if it is
+   1-64 [A-Za-z0-9_-] characters and unique; otherwise stored-i) and its original timestamp
+   (only a finite number > 0 and no more than one day in the future; otherwise null). The saved
+   card shows "Date unknown" when the timestamp is null.
+F5 FIXED. In updateLeg, changing a Stock leg to Call or Put sets expiry to 30 if it is 0 or less
+   and IV to iv30 if it is 0 or less. App now passes iv30 = market iv30, or the App IV when that
+   is missing, with 30% as the last fallback. The leg is then priced from the chain or the model
+   as usual. Option -> option type changes keep their DTE and IV.
+   Side effect: chainContractIv's fallback when a contract has no feed IV and cannot be
+   back-solved is now the App IV instead of a fixed 30% whenever the market has no iv30.
+F6 FIXED. New helper yahooPreviousClose uses meta.previousClose or regularMarketPreviousClose
+   when present. Otherwise it takes the last non-null daily close before the bar containing
+   regularMarketTime. meta.chartPreviousClose is no longer used. Verified against the live Yahoo
+   SPY response: previous close 715.87, and the implied -3.64% matches Yahoo's
+   regularMarketChangePercent. The old code would have shown 754.37 (-8.56%). If nothing
+   suitable exists, prevClose falls back to CBOE prev_day_close or is hidden.
+F7 FIXED.
+   - getTradeData and normalizeCboeOptions accept only finite numbers in range (safeNum,
+     safePrice; prices must be > 0 and no more than 1e6, delta between -1 and 1, IV between 0
+     and 50 as a decimal). Strings, NaN, Infinity and objects are treated as missing.
+   - Text fields are length-limited, and option symbols must be strings.
+   - A crossed quote (ask < bid) is not used as a midpoint.
+   - A CBOE prev_day_close fallback is now labelled 'CBOE previous close' instead of 'Unavailable'.
+   - When Yahoo has no usable price, the quote's source and timestamp are null, so a CBOE price
+     is labelled 'CBOE underlying' (fixes the S13 item).
+   - The final price guard requires a finite number.
+   - An AppErrorBoundary class wraps <App/> and shows a message and a Reload button instead of a
+     blank page. It catches render errors only, not errors in event handlers or async code.
+F8 FIXED. New App helper spotProvenance() returns `Underlying: <source>` plus the quote timestamp
+   from marketRef, or `Underlying: <underlyingSource>` with no timestamp after a manual, LLM or
+   saved price. It is used for Call/Put -> Stock in the editor (falling back to 'Underlying spot
+   (source unknown)'), for the Covered Call and Protective Put stock legs, and for delta-hedge
+   stock legs. Hedge also now sets the template to Custom (S13 item).
+
+Tests: work/claude-fix-tests.cjs now has 34 checks (outputs/claude-fix-tests.json) and is part of
+   run-review-checks.cjs. It runs the real source slices: helpers WITHOUT a global `symbol`,
+   handleYahooFetch, loadSavedStrategy, both persistence effects, saveCurrentStrategy, updateLeg,
+   applyStrategy, handleDeltaHedge, getTradeData, normalizeCboeOptions and yahooPreviousClose.
+   Against a copy with F1/F2 reverted, it fails 4 checks as it should.
+   work/render-smoke.cjs was extended so its mock React supports class components (needed for the
+   error boundary).
+   `node run-review-checks.cjs` now reports 82 checks passing, plus compilation and the mocked render.
+   (The scratchpad repro.cjs still prints "REPRODUCED" for R2-R6 because it hard-codes the old
+   state or logic and does not supply the new spotProvenance or iv30 inputs. It is superseded by
+   claude-fix-tests.cjs.)
+Still open: S1-S13 except the S13 items noted above. The CBOE timestamp timezone (S2) is
+   untouched.
+
+Browser check (2026-11-22, Claude desktop app's built-in Chromium pane):
+   Served with `python -m http.server 8765 --bind 127.0.0.1 --directory outputs` (config in
+   .claude/launch.json), because the pane cannot open file:// pages. Viewports: desktop and
+   375x812 mobile emulation. The page loaded its libraries from the CDNs, and its own startup
+   fetch sent "SPY" (later "QQQ") to the public relays, which is normal app behavior. No LLM was
+   called. Test data was written to localStorage for http://localhost:8765 only, and removed
+   afterwards.
+   Observed:
+   - Renders without page errors. Console: only expected CDN warnings (Tailwind CDN, in-browser
+     Babel), one Recharts zero-size warning on first layout, and CORS failures of the "direct"
+     relay attempt. These are expected; the app then falls back to r.jina.ai.
+   - Yahoo via relay WORKED live: SPY $689.81, "prev close $715.87 (-3.64%)". F6 confirmed in the
+     real UI. The default iron condor was rebuilt at the live price (strikes 620.83 / 655.32 /
+     724.30 / 758.79).
+   - The CBOE chain was UNAVAILABLE live. Direct access is blocked by CORS, r.jina.ai returns a
+     Cloudflare "Attention Required" page (HTTP 200, so it is rejected only when JSON parsing
+     fails), and allorigins and codetabs time out after 15 s. With no chain, the header says
+     "manual/quote" even though this is a live Yahoo quote (S13 label issue, seen in the UI).
+   - F1 in the real UI: in this one tab, fetch was patched so cdn.cboe.com URLs returned a
+     SYNTHETIC chain (222 contracts around 690; not market data). Pressing the app's Refresh
+     button then worked with no error. The chain panel appeared, IV updated from the chain, and
+     the template switch enriched legs from it.
+   - F8 in UI: the Covered Call stock leg shows "Underlying: Yahoo regular market quote ·
+     <quote time>", and the call shows "CBOE bid/ask midpoint".
+   - F5 in UI: Stock -> Call gave DTE 30, strike 690, IV 18.5 (iv30) and a model price of $15.92.
+   - F3 save guard in UI: saving with 0 legs showed the alert "Cannot save this strategy…".
+     Undo restored the legs.
+   - F3 + F4 in UI: localStorage was seeded with one valid entry (id "oldone", dated 2026-10-01)
+     and one invalid entry (0 legs). Enabling persistence kept the session strategy and added the
+     valid stored one with its original date (shown 10/1/2026). The invalid entry was skipped,
+     the notice "1 saved strategy was invalid…" appeared, the backup key held the exact original
+     text, and the main key was rewritten with both valid strategies.
+   - F2 in UI: switched to QQQ (live Yahoo $608.45), loaded the saved SPY strategy and pressed
+     Refresh. Both loaded legs were unchanged.
+   - Time display: the chain timestamp "2026-11-20 16:15:00" (synthetic, in the CBOE-style
+     format) was shown as 4:15 PM in the browser's own timezone (UTC+8 here), next to a Yahoo
+     quote time correctly shown as 5:00 AM the next day. That is consistent with S2. The real
+     CBOE format is still unverified.
+   - Mobile (375 px):
+     - Leg cards lay out in two columns and work.
+     - The page scrolls sideways by 9 px (scrollWidth 384). The cause is the invisible
+       TooltipLabel popovers (w-48, opacity-0) on the leg-card labels, which extend past the
+       right edge. NEW LOW finding (M1). Fix: anchor the popovers `right-0` in the right-hand
+       column, or hide them below md.
+     - The Export JSON and Delete buttons on saved strategies have computed opacity 0, so they
+       are unusable on touch (S11 confirmed).
+     - The header hides the underlying price on mobile (`hidden md:flex`); the price appears
+       only further down the page. LOW (M2).
+     - The sticky header takes about 140 px of an 812 px screen. LOW (M3).
+   - "Undo leg edit" is enabled immediately after page load (S5 confirmed in UI).
+   Mobile fixes (2026-11-22, user request "Fix mobile issues"):
+   M1 FIXED. The TooltipLabel popover is now `hidden group-hover:block`, so it takes no layout
+      space until it is shown. It is also capped at max-w-[calc(100vw-2rem)]. A new
+      align="right" prop anchors it with right-0 for the right-hand mobile columns (Qty, Type, IV).
+      Browser at 375px: scrollWidth went from 384 to 375. With every popover forced open, all of
+      them stay within 11-238 px and scrollWidth stays at 375.
+   S11 FIXED. The saved-strategy action buttons use a new `.hover-reveal` class (CSS in <style>).
+      They are hidden only under @media (hover: hover) and (pointer: fine), and shown on card hover
+      or keyboard :focus-within.
+      Browser results:
+      - 375px touch emulation: opacity 1.
+      - 1280px desktop: idle 0, keyboard focus 1, real mouse hover 1.
+      (In the hidden pane, a raw read showed 1 because a CSS transition was paused at time 0.
+      After finishing the transition the true end values were confirmed.)
+   M2 FIXED. Below md, a compact "SPY $689.81" line (plus " · data error" when relevant) appears
+      under the title. It is hidden from md up, where the original price block shows. Browser:
+      visible at 375px and updated to the live $689.81; hidden at 1280px.
+   M3 FIXED. The header is `md:sticky md:top-0`, so it is static on phones and sticky from 768px.
+      Browser: position static at 375px and sticky at 1280px. The header is about 154px tall on
+      phones but now scrolls away.
+   Trade-off: on phones the price in the header now scrolls away; it is still in the "Underlying"
+   card further down. Tooltip popovers no longer fade or slide in, they just appear.
+   Checks after the mobile fixes: node run-review-checks.cjs still reports 82 checks passing,
+   plus compilation and the mocked render.
+
+   S1 and S5 fixes (2026-11-22, user request "Fix S1 and S5 next"):
+   S1 FIXED. Saved strategies now age to the day they are loaded.
+      - saveCurrentStrategy stamps each option leg with an absolute `expiryAt` (save time + DTE
+        days) via stampExpiryDates. A loaded leg whose existing expiryAt still matches its DTE
+        keeps it, so re-saving does not drift. Stock legs get null.
+      - validateStrategyImport now returns `timestamp`. It is lenient: a non-number, a value
+        <= 0, or one more than 1 day in the future becomes null.
+      - validateStrategyImport also returns per-leg `expiryAt`. It is strict when present: it must
+        be a finite number between 2000-01-01 and now + 3651 days, or the import is rejected.
+      - loadSavedStrategy (also used by import) runs ageSavedLegs. It uses expiryAt if present,
+        else timestamp + DTE, else leaves the DTE as saved and flags it. DTE is
+        max(0, round((expiry date - now) / 1 day)), so expired legs drop to 0 DTE and are valued
+        at intrinsic.
+      - Entry premiums are not changed.
+      - A notice appears in the Data provenance panel, e.g. "Saved 10 days ago: days to expiry
+        recalculated … 1 option leg has expired … Entry premiums are unchanged." or "Save date
+        unknown …". It clears when a template rebuilds the legs.
+      - Older saves and exports without expiryAt age from their timestamp. Without either, the
+        DTE is unchanged and the notice says so.
+      - Not addressed: legs in an open page do not age while the page stays open across days.
+        Chain DTE rounding and the expiry time of day (S7) are unchanged.
+   S5 FIXED.
+      - setLegs now reads the current legs from a ref (rawLegsRef) instead of the render-time
+        `rawLegs` closure. History entries and functional updates therefore use the real previous
+        legs, even from async callers. A no-op update (same array) makes no entry.
+      - The new replaceLegs sets legs and clears history without an undo entry. It is used by
+        loadSavedStrategy and import.
+      - The startup placeholder build clears history after it runs. A fetch-triggered rebuild
+        (opts.rebuild or a ticker change) also clears history.
+      - Undo also updates the ref. History is still capped at 30 entries.
+      - Trade-off: if the user edits legs while the startup fetch is still loading, the live
+        rebuild replaces those edits and they cannot be undone (they were replaced before too;
+        previously Undo restored [] instead).
+   Browser (built-in pane, live Yahoo via relay):
+      - Undo was disabled on load and still disabled after the live rebuild at $689.81.
+      - Removing a leg enabled Undo; Undo restored all 4 strikes and disabled itself again.
+      - Saved with persistence on: the stored legs had DTE 45 and expiryAt = timestamp + 45 days.
+        I back-dated the stored copy by 10 days in localStorage, reloaded, enabled persistence and
+        loaded it. The card date was 11/12/2026, all DTEs were 35, the notice read "Saved 10 days
+        ago: … (4 legs changed). Entry premiums are unchanged.", and Undo stayed disabled.
+      - Switching to the Straddle template cleared the notice and enabled Undo.
+      - Test data was removed from localStorage afterwards.
+   Tests: work/claude-fix-tests.cjs now has 47 checks (13 new for S1/S5). The existing harness
+   stubs were extended with setLoadNotice and replaceLegs. `node run-review-checks.cjs` reports
+   95 checks passing, plus compilation and the mocked render.
+
+   S2 and S3 fixes (2026-11-22, user request "Fix S2 and S3 next"):
+   S2 FIXED.
+      - New parseExchangeTimestamp:
+        - "YYYY-MM-DD HH:MM[:SS]" with no offset is read as America/New_York wall time, using
+          Intl and a two-pass offset so DST changes are handled.
+        - ISO strings with Z or an explicit offset are parsed as given.
+        - Numbers are epoch seconds (< 1e12) or milliseconds.
+        - Anything else, or an out-of-range field, gives null, so the display says "Unavailable"
+          rather than showing a wrong time.
+      - normalizeCboeOptions now stores the chain asOf and each contract's quoteTimestamp as
+        epoch ms (it used to store raw strings).
+      - The new formatStamp shows the viewer's local time with a zone name. It is used for the
+        quote, retrieved and chain times and the per-leg time, and it also handles legacy string
+        timestamps in old session saves.
+      - The chain line now says the feed's time is US Eastern and is shown in your time zone.
+      - Caveat: the real CBOE payload format is still UNVERIFIED (CBOE remained unreachable
+        through all relays). If it uses another format the time shows "Unavailable", not a wrong
+        value.
+      - S7 (expiry at 20:00 UTC) is unchanged.
+   S3 FIXED (wording now matches the code).
+      - FORBIDDEN_ACTIONS no longer forbids sending "symbols … to any third-party service", which
+        every quote fetch does. It now forbids sending saved strategies, legs or pricing settings
+        to third parties, except to the configured LLM endpoint when LLM calls are on and you
+        press Generate.
+      - The LLM rule no longer says "user-configured proxy"; direct Gemini with
+        GEMINI_API_KEY is named.
+      - The charter's prohibited action about storing position data now says the optional LLM
+        endpoint receives legs on Generate.
+      - Known limitations now name all three relays, say they see every ticker you load, and say
+        that SPY is fetched automatically on page open.
+      - The kill-switch text no longer claims data fetches are "user-initiated". It says the
+        automatic SPY load and refreshes still send the ticker to the relays.
+      - The banner says data comes through public relays that see the tickers.
+      - New DATA_FLOWS list in the Charter panel ("Data sent off this device"): the ticker to the
+        relays (automatic plus refresh); ticker plus question to the LLM (AI button); symbol, price,
+        every leg and the shared settings to the LLM (Generate); IP and browser details to the
+        CDNs and Google Fonts. It also states that saved strategies and exports stay local.
+   Tests: 8 new in work/claude-fix-tests.cjs (55 total).
+      - The S2 tests cover EST and EDT, both sides of the spring-forward change, the ambiguous
+        fall-back hour, explicit offsets, epoch seconds and ms, 11 invalid inputs, the
+        normalizer's output and formatStamp.
+      - The S3 tests check that every relay host in CORS_RELAYS appears in both DATA_FLOWS and the
+        known limitations; that every external script, stylesheet or importmap host in the page
+        is disclosed; that no forbidden rule bans the default behavior; that the auto-load and
+        LLM payload are disclosed; and that the LLM prompt still contains legs, model and symbol.
+        If someone adds a relay or CDN without updating the disclosure, these tests fail.
+      - The 55 checks passed with Node's TZ set to America/Los_Angeles, Europe/London and
+        Pacific/Auckland, and with the system zone (Asia/Singapore). Note: Git Bash drops the TZ
+        variable; PowerShell $env:TZ works.
+      - `node run-review-checks.cjs` reports 103 checks passing, plus compilation and the mocked
+        render.
+   Browser (built-in pane, browser zone Asia/Singapore, live Yahoo via relay, CBOE substituted by
+   a synthetic chain in this tab only, because CBOE was still unreachable):
+      - The chain time "2026-11-20 16:15:00" showed as "Nov 21, 2026, 5:15:00 AM GMT+8", which is
+        correct for 4:15 PM New York time. The old code showed 4:15 PM local.
+      - The Yahoo quote time showed "Nov 21, 2026, 5:00:04 AM GMT+8".
+      - The Charter panel showed the new Data Sent Off This Device section, the revised forbidden
+        list and the revised kill-switch text. The banner text was updated.
+
+   S4 and S7 fixes (2026-11-22, user request "Fix S4 and S7 next"):
+   S4 FIXED. The counter now counts requests actually sent.
+      - fetchViaRelay reports every relay attempt (success or failure, from a finally block) and
+        callGemini reports each LLM request.
+      - When no LLM endpoint is configured, nothing is sent and nothing is counted.
+      - Reports go through a module-level reportExternalCall to listeners. App subscribes in a
+        useEffect and keeps {data, dataFailed, llm, llmFailed}.
+      - All hand-written setCallCount increments were removed: the +2 per fetch, which ignored
+        failures and counted cache hits, and the +1 per LLM call.
+      - The Charter panel shows the total plus "data N (M failed) · LLM K (J failed)", and says
+        what is and isn't counted. Cache hits send nothing; library and font loads aren't counted.
+      - Out of scope: dataRelay still shows whichever relay succeeded last (an S13 item).
+   S7 FIXED.
+      - parseContractSymbol puts the expiry at 4:00 PM America/New_York (via
+        parseExchangeTimestamp), which is 21:00 UTC in winter and 20:00 in summer. It used to be a
+        fixed 20:00 UTC, i.e. 3 PM in winter. Invalid dates such as month 13 or day 32 are now
+        rejected.
+      - New dteFromExpiry: whole days from 1 day out; below 1 day the fraction is kept (2
+        decimals, minimum 0.01); 0 once expired. It is used for chain expirations, the viewChain
+        fallback, saved-strategy aging (ageSavedLegs) and the expiry-date consistency check
+        (stampExpiryDates).
+      - impliedVolFromPrice accepts T > 1e-6 years (it was 0.001, about 9 hours), so same-day
+        contracts can be back-solved.
+      - The leg editor accepts fractional DTE (parseFloat rounded to 2 decimals; input
+        step="any").
+      - Extra fix found while doing S7: the chain's expiry dropdown formatted dates in the viewer's
+        zone, so viewers east of New York saw the next day. It now uses
+        timeZone 'America/New_York'.
+      - Not addressed: AM-settled index options (e.g. SPX monthlies) are still treated as 4 PM
+        expiries. The range slider for days passed still moves in whole days.
+   Tests: 9 new in work/claude-fix-tests.cjs (64 total).
+      - S4: four failing relays then success gives fail, fail, fail, ok; a cache hit adds 0; LLM
+        calls are counted once on failure and on success, and not at all with no endpoint; no
+        setCallCount remains.
+      - S7: winter and summer 4 PM expiries; bad dates; dteFromExpiry boundaries. With a frozen
+        clock, a same-day contract is listed at 10:00 EST with DTE 0.25 and a back-solvable IV,
+        and is still listed at 3:30 PM EST (the old code dropped it at 3:00) with DTE 0.02 and
+        gone at 4:01 PM. Also fractional DTE in the editor and in aging, and the New York date
+        label.
+      - Passed under the system zone (Asia/Singapore), America/Los_Angeles and Pacific/Auckland.
+        `node run-review-checks.cjs` reports 112 checks passing, plus compilation and the mocked
+        render.
+   Browser (built-in pane, GMT+8):
+      - S4: after startup the counter showed "6 | data 6 (5 failed)". That is Yahoo direct
+        (CORS) + r.jina.ai ok, and CBOE direct + r.jina.ai (Cloudflare page) + allorigins +
+        codetabs, all failed. The old code showed 2.
+      - S4: a refresh inside the 45-second cache window sent 0 requests (fetch wrapped in this
+        tab) and the counter stayed at 6. A later refresh sent exactly 5 requests and the counter
+        went from 6 to 11 (4 of the 5 failed).
+      - S7, with a synthetic CBOE chain in this tab only (CBOE still unreachable): at 9:30 AM New
+        York, today's contract showed as "0.27d · Nov 22, 26" with the New York date while the
+        browser was already on Nov 23. Adding it as a leg gave DTE 0.27 and IV 29.1%,
+        back-solved from the $2.10 mid.
+      - Cosmetic, pre-existing (LOW): a back-solved IV is shown unrounded (29.1393202647502).
+        Suggest rounding chainContractIv to 0.1.
+
+   S6 and S8 fixes (2026-11-22, user request "Fix S6 and S8 next"):
+   S6 FIXED.
+      - The AI price flow no longer uses requestVersion. Every keystroke in the ticker box bumps
+        that counter (to cancel in-flight quote fetches, which is still correct), so it used to
+        silently drop an AI result requested before the keystroke.
+      - handleFetchData now records a basis {symbol, price, fetchedAt of the active feed} and
+        always shows the result.
+      - New helper verificationStaleReason(pending, current) compares that basis with the active
+        underlying, not the draft ticker. The dialog shows a red "This suggestion no longer
+        applies. <reason>" banner, and Accept is disabled while stale.
+      - acceptVerifiedPrice refuses a stale suggestion with an alert ("Not applied: …") instead
+        of silently closing.
+      - A stale suggestion is caused by: a different active symbol, a refreshed or replaced feed
+        (fetchedAt changed), or a different underlying price (manual, LLM or saved load).
+      - A cache-hit refresh keeps fetchedAt, so it does not make a suggestion stale.
+   S8 FIXED. In enrichLegsFromChain, when the snapped listed contract has no usable price:
+      - the leg keeps the snapped strike and the chain expiry;
+      - IV is the feed IV if present, else the leg's IV;
+      - price is calculateOptionPrice at that strike and expiry with the shared rate and dividend;
+      - the label is 'Theoretical model (listed contract had no quote)' and quoteTimestamp is null.
+      Quoted contracts are unchanged (chain price, CBOE label and timestamp, chain IV).
+   Tests: 5 new in work/claude-fix-tests.cjs (69 total).
+      - S6 staleness rules.
+      - The real handleFetchData with two keystrokes during the request: the suggestion is kept
+        and accepting it applies the price.
+      - Three stale scenarios, each refused with "Not applied: …".
+      - Static checks on the dialog, and that the old ticket check is gone.
+      - S8: the real enrichLegsFromChain with an unquoted call that has feed IV, a quoted call,
+        and an unquoted put without IV.
+      - `node run-review-checks.cjs` reports 117 checks passing, plus compilation and the mocked
+        render.
+   Browser (built-in pane). The LLM was a FAKE proxy URL (https://llm-proxy.invalid) answered
+   inside the test tab; no real LLM endpoint was contacted. CBOE was a synthetic chain in the
+   test tab.
+      - S6: with LLM on, I pressed AI, typed X then Backspace in the ticker box (real keystrokes)
+        while the request was pending, then let the answer arrive. The dialog opened with no stale
+        warning; the old code would have dropped it. Typing "Q" while the dialog was open
+        (ticker "SPYQ") did not affect it. Accept applied $691.25 and labelled the source
+        "Human-verified LLM suggestion (not market feed)".
+      - S6 stale case: a second AI request, then a manual price change to $700 while its dialog
+        was open. The banner read "…The underlying price changed from $691.25 to $700.00 after
+        this price was requested…", Accept was disabled, and Reject closed the dialog.
+      - S8: in the iron condor on a chain where the 620 put and the 760 call were listed without
+        quotes, those legs showed "Theoretical model (listed contract had no quote) · timestamp
+        unavailable". The 620 put was priced at IV 20 → $1.05 and the 760 call at the feed IV 23
+        → $3.82; both match an independent calculateOptionPrice run. The 655 and 725 legs kept
+        "CBOE bid/ask midpoint" with their timestamps.
+      - Side note (expected behavior, not a defect): Refresh fetches whatever is typed in the
+        ticker box. After the "SPYQ" keystroke test it loaded the real ticker SPYQ ($152.88)
+        until SPY was re-entered.
+      - My first test tab was closed partway through, apparently from outside my session, and a
+        file:// tab of the app appeared. I redid the S6 run in a new tab and did not touch the
+        file:// tab.
+
+   S9 and S10 fixes (2026-11-22, user request "Fix S9 and S10 next"):
+   S9 FIXED.
+      - impliedVolFromPrice(S, K, T, r, price, isCall, q) now solves with calculateOptionPrice,
+        the same Black-Scholes and continuous dividend yield the payoff engine uses. It used to
+        call bsCall/bsPut with no dividend.
+      - It returns null when no volatility between 0.5% and 500% reproduces the price: at or
+        below the near-zero-vol value (about discounted intrinsic), or at or above the
+        high-volatility bound. The old code silently returned 0.5% below intrinsic.
+      - chainContractIv takes the shared model (default {rate 0.05, dividend 0}) and rounds a
+        back-solved IV to 0.1, which fixes the cosmetic item noted under S7. All 3 call sites
+        pass the App model: updateLeg exact chain match, enrichLegsFromChain and addChainLeg.
+      - The chain panel now DISPLAYS the back-solved IV for contracts without feed IV, using the
+        shared model and marked ≈. It used to show "≈—" while the footer claimed a back-solved IV
+        was shown. "—" now means no volatility reproduces the price.
+      - CBOE's own feed IVs are used as given; their rate and dividend assumptions are CBOE's and
+        are not adjusted.
+      - Effect (node, rate 1%, dividend 3%, 540 call at 40 DTE, $72.40 mid, spot 600): the IV
+        back-solved under the shared model gives a T+0 P/L of -$0.48. The old fixed 5%,
+        no-dividend solve gave -$334.77 for an unchanged position.
+   S10 FIXED.
+      - New moneyness(strike, spot, isPut): a call is ITM below spot, a put ITM above it, neither
+        at spot.
+      - Row-level shading (strike <= spot, title "In the money") was removed. Each call or put
+        cell is shaded and titled on its own and carries data-moneyness.
+      - The footer explains the shading and the ≈ / — IV notation.
+   Tests: 7 new in work/claude-fix-tests.cjs (76 total).
+      - S9: round-trip IVs at rate 3% and dividend 2.5% for ITM and OTM calls and puts; with
+        dividends the old solve is biased by more than 1 vol point and the new one is exact; the
+        T+0 re-pricing check above; null below intrinsic and above spot, with the iv30 fallback;
+        all call sites pass the model.
+      - S10: moneyness rules; the old row shading is gone.
+      - `node run-review-checks.cjs` reports 124 checks passing, plus compilation and the mocked
+        render.
+   Browser (built-in pane, live Yahoo SPY $689.81, synthetic CBOE chain in the test tab; the rate
+   was set to 1% and the dividend yield to 3% in the UI):
+      - All 70 chain cells were shaded consistently: calls below spot ITM, puts above spot ITM,
+        none wrong. For example, the 680 call and the 700 put were shaded, and the 680 put, 690
+        call and 700 call were not.
+      - Cells without feed IV showed back-solved values, e.g. the 520 call "176.01 ≈70.8%" and
+        the 800 put "115.39 ≈34.7%".
+      - Adding the 520 call as a leg gave IV 70.8. An independent node solve gives 70.84% (the old
+        5%, no-dividend solve gives 58.04%), and that leg re-prices to -$1.39 at T+0, a residual
+        from rounding IV to 0.1.
+
+   S12 and S13 fixes (2026-11-22, user request "Fix S12 and S13 next"):
+   S12 FIXED.
+      - New NumberField component: a text input with inputMode="decimal" that keeps what is being
+        typed as a draft and commits ONLY on blur or Enter. Escape reverts.
+      - An emptied field quietly keeps its old value.
+      - A draft that is not a finite number (isNumericDraft: plain decimals, optional sign and
+        exponent; no commas, "-", "." or "Infinity"), or that the owner rejects by returning
+        false, is not applied. The field shows the last valid value with aria-invalid, a red
+        border and a title naming the allowed range.
+      - Used for every editable number:
+        - the five leg fields (quantity, DTE, strike, IV, premium), now with aria-labels
+          "Leg N …";
+        - the five shared pricing/cost fields (range-checked: out of range is rejected instead of
+          ignored);
+        - the three trade-comparison fields (out of range is rejected instead of silently
+          clamped).
+      - Effect: clearing a strike no longer snaps it to spot and reprices; clearing quantity no
+        longer sets 1; clearing a model field no longer sets 0. Provenance changes and undo steps
+        happen once per committed edit, not per keystroke.
+      - Trade-offs: the chart updates on commit, not while typing. The spinner arrows of
+        type="number" are gone.
+   S13 FIXED (remaining items).
+      - LLM price extraction: new extractPriceCandidates accepts "$580", "$1,234.56" and
+        "$ 691.25", and bare numbers with exactly two decimals that are not followed by "%".
+        Candidates are de-duplicated and kept in order.
+        - Before: "$1,234.56" was read as 234.56, "$580" was missed, and "19.50%" was taken as a
+          price.
+        - The IV regex is unchanged.
+      - Duplicate leg no longer uses crypto.randomUUID, which is missing in non-secure contexts
+        such as plain http on a LAN IP. Ids are now dup-<time>-<random>.
+      - Header status (md and up):
+        - It now names the actual source, e.g. "Yahoo regular market quote", plus
+          "+ CBOE chain (delayed)" when a chain loaded, and labels the time "retrieved HH:MM".
+        - It used to show the retrieval time next to "Yahoo + CBOE delayed", or "manual/quote"
+          for a live Yahoo quote without a chain.
+        - With no feed it shows the underlying source (Manual, LLM-verified, Saved/imported,
+          Illustrative demo) instead of "no data yet".
+      - Relay label: fetchViaRelay reports which relay served each request. getTradeData stores
+        {quote, chain} relays with the result and marks cache hits fromCache. The chain panel
+        shows e.g. "quote r.jina.ai · chain r.jina.ai", plus "(cached)" on a cache hit. It used
+        to show whichever relay last succeeded globally, including on cache hits.
+      - work/color-regression.cjs now sets a failing exit code when the CURRENT app fails a
+        check. It used to test for "fixed" in the file name, which never matched, so it could
+        never fail.
+      - The other S13 items were already fixed: Yahoo-null-price labelling (F7) and the Hedge
+        template name (F8).
+   Tests: 11 new in work/claude-fix-tests.cjs (87 total).
+      - S12: the real NumberField JSX is compiled with the bundled Babel and driven by a minimal
+        hooks renderer. Checked: one commit on Enter after "6", "65", "650"; clear-and-leave
+        keeps the value; Escape reverts; no commit when unchanged; "abc" and owner-rejected
+        values are flagged and not applied; editing clears the flag; numeric-draft rules; no
+        type="number" inputs remain.
+      - S13: extraction cases; no crypto.randomUUID; header wording; relays recorded per part
+        (Yahoo via r.jina.ai after a direct failure, CBOE direct) with "(cached)" on a cache hit;
+        the color-regression exit code.
+      - `node run-review-checks.cjs` reports 135 checks passing, plus compilation and the mocked
+        render, and color-regression.cjs exits 0.
+   Browser (built-in pane, live Yahoo SPY $689.81; synthetic CBOE chain in the test tab for the
+   relay label):
+      - S12, real keystrokes in the "Leg 1 strike" field:
+        - Ctrl+A then Backspace left the field empty with the premium unchanged at $1.09 and
+          Undo still disabled.
+        - Typing "6" changed nothing.
+        - Enter on "610" repriced once to $0.59 (Theoretical model) and enabled Undo.
+        - One Undo restored 620.83 / $1.09 and disabled Undo again.
+      - S12, "Annual interest %":
+        - "250" and "abc" were rejected; the value stayed 5, then 4.25, with aria-invalid and the
+          title "Enter a number from -10 to 100. The previous value was kept."
+        - The red border was confirmed (rgb 239,68,68) after finishing the border-color
+          transition; the pane had paused it at time 0.
+        - Entering 4.25 committed.
+      - Header at 1280px: "Yahoo regular market quote · retrieved 10:44:52 PM", then
+        "Yahoo regular market quote + CBOE chain (delayed) · retrieved 10:45:43 PM".
+      - Relay label: "quote r.jina.ai · chain r.jina.ai", then "… (cached)" after an immediate
+        second refresh.
+      - Duplicate leg added a 5th leg with the same strike. The page was a secure context
+        (localhost), so the non-secure-context case was covered only by the code change and the
+        test, not seen in the browser.
+
+   JSON import and download verification (2026-11-22, user request "Verify the JSON import and
+   downloads next"). No code changes.
+   Method:
+      - Built-in pane, http://localhost:8765, live Yahoo SPY $689.81.
+      - Downloads: HTMLAnchorElement.prototype.click was wrapped in the test tab. For the app's
+        <a download> links it recorded the filename and read the content from the data: or blob:
+        URL instead of saving it, so nothing was written to disk.
+      - Import: a File object was assigned to the real <input type=file> through DataTransfer and
+        its change event fired, which runs the app's own importStrategy handler.
+      - NOT exercised: the OS file-picker dialog itself, and the browser actually saving a file
+        to disk.
+   JSON export (saved strategy, "Export to JSON"): WORKS.
+      - A data: URL, 1931 bytes, valid JSON with id, symbol, timestamp, name, underlyingPrice,
+        underlyingIv, model, and 4 legs. Each leg had type, side, strike, DTE 45, a numeric
+        expiryAt (from S1), premium, IV and premiumSource.
+      - The temporary link was removed from the DOM.
+   CSV export (Scenario Lab, "Export CSV"): WORKS.
+      - A blob: URL named scenario-analysis.csv: header plus 7 rows, columns T+0/11/23/45, CRLF
+        line endings, no BOM.
+      - Every cell matched the on-screen Scenario Lab table (0 mismatches across 7 rows × 6
+        columns).
+   JSON import: WORKS.
+      - The exported file, back-dated 10 days with a tampered "Trusted exchange feed" source and
+        a quote timestamp, imported without an alert.
+        - Legs were relabelled "Imported / unverified · timestamp unavailable".
+        - DTE was aged from 45 to 35 with the notice "Saved 10 days ago…".
+        - Entry premiums were unchanged; the spot came from the file ($650.50) with source
+          "Saved / imported underlying".
+        - Undo was disabled, and the file input was cleared so the same file can be chosen again.
+      - A legacy file (no timestamp, no expiryAt) for QQQ, with an HTML string as its name,
+        loaded as QQQ at $608.45 with the notice "Save date unknown for 4 option legs…". No
+        element was injected (the name is not displayed on import; React would escape it).
+      - 12 bad files were rejected with an alert, and legs and spot stayed unchanged:
+        - malformed JSON;
+        - JSON null or array ("Invalid symbol");
+        - an unknown leg type;
+        - a negative premium;
+        - a strike given as a string;
+        - 0 legs or 41 legs;
+        - a lowercase or injected symbol;
+        - a 900% rate;
+        - a malformed expiryAt;
+        - a file over 1 MB.
+   New LOW findings (not fixed):
+      D1  The JSON export filename only replaces whitespace (`name.replace(/\s+/g,'_')`), so
+          "/", '"', ":" and similar characters pass through. Repro: save as `IC test 1/2 "Nov"`
+          → `IC_test_1/2_"Nov"_SPY.json`. These are invalid in Windows filenames, so the result
+          depends on how the browser sanitizes them; a symbol such as BRK/B is affected too.
+          Fix: replace [^A-Za-z0-9._-] with "_".
+      D2  The CSV filename is always scenario-analysis.csv, so repeated exports collide. The file
+          records no symbol, spot, spot source, rate, dividend or IV. Fix: include symbol and
+          date in the name, and add a few "# key,value" assumption lines or a second sheet-style
+          block.
+      D3  A JSON null or array is reported as "Invalid symbol". Fix: check for a plain object
+          first and say "Not a strategy file".
+
+   D1–D3 fixes (2026-11-22, user request "Fix D1–D3"):
+   D1 FIXED.
+      - New safeFileName: runs of anything other than A-Z, a-z, 0-9, ".", "_" and "-" become "_";
+        leading and trailing dots and underscores are trimmed; at most 80 characters; a fallback
+        name is used if nothing is left.
+      - The JSON export is now `${safeFileName(name)}_${safeFileName(symbol)}.json`.
+      - Examples: `IC test 1/2 "Nov"` → IC_test_1_2_Nov; BRK/B → BRK_B; ^SPX → SPX;
+        ..\..\evil → evil.
+   D2 FIXED.
+      - The CSV is named scenario_<SYMBOL>_<local YYYY-MM-DD>.csv.
+      - The table is unchanged and still starts on line 1. It is followed by a blank line and an
+        "Assumption,Value" block: symbol, underlying price, underlying source, quote time (UTC),
+        interest rate %, dividend yield %, option and stock commissions, slippage, the IV basis
+        (each leg's own IV, no shift), leg count, a cost note, and export time (UTC).
+      - Text cells are CSV-quoted when needed. A leading = + - or @ is prefixed with ' so
+        spreadsheets don't run it as a formula.
+      - scenarioCSV(matrix) without meta returns exactly the old output, so the existing
+        color-tests CSV check is unaffected.
+   D3 FIXED. validateStrategyImport first rejects null, arrays, numbers, strings and booleans with
+      "Not a strategy file (expected a JSON object with symbol and legs)". A non-string or
+      malformed symbol still says "Invalid symbol".
+   Tests: 5 new in work/claude-fix-tests.cjs (92 total).
+      - safeFileName cases, including Windows-reserved characters, path traversal, non-ASCII and
+        the length cap; the export line uses it.
+      - The CSV table is unchanged without meta, and with meta the assumptions block contains
+        correct values (4.25% rate, 1.3% yield, quote time, leg count, export time).
+      - CSV quoting and formula neutralising.
+      - The filename pattern and the ScenarioLab meta wiring.
+      - Non-object imports, and that valid strategies still import.
+      - `node run-review-checks.cjs` reports 140 checks passing, plus compilation and the mocked
+        render.
+   Browser (built-in pane, live Yahoo SPY $689.81, same in-page download capture, nothing saved
+   to disk):
+      - Saving as `IC test 1/2 "Nov"` and exporting gave IC_test_1_2_Nov_SPY.json, which
+        re-imported with no alert.
+      - The CSV was named scenario_SPY_2026-11-22.csv: the same 8 table lines as before, a blank
+        line, then the assumptions. Symbol SPY, price 689.81, source "Yahoo regular market
+        quote", quote time 2026-11-20T21:00:04.000Z, rate 5, yield 0, commissions and slippage
+        0, 4 legs, export time.
+      - Importing null, [1,2] and "SPY" each alerted "Import rejected: Not a strategy file
+        (expected a JSON object with symbol and legs)".
+
+   Error-boundary verification (2026-11-22, user request "Verify the error boundary fallback
+   next"). No app code changes.
+   Method:
+      - The app was NOT modified to crash. In the test tab only, the Intl.NumberFormat
+        "format" getter was wrapped so that currency formatting throws "Injected render failure
+        for boundary test".
+      - formatCurrency runs during render (StrategySummary, Scenario Lab and others), so the next
+        re-render, triggered by switching the template to Straddle, threw inside React rendering.
+   Observed (built-in pane, live Yahoo SPY $689.81):
+      - The whole app was replaced by the fallback (role="alert", screenshot taken): "The page hit
+        an error while rendering.", the error message, "No orders can be placed by this tool.
+        Reload to start again; strategies already persisted to localStorage are kept." and a
+        Reload button.
+      - Console: React's error report, then the boundary's own "Render failure <error> <info>"
+        (componentDidCatch).
+      - A real click on Reload reloaded the page (an in-page marker variable was gone). The
+        injected fault was gone with the reload and the app rendered normally.
+      - The fallback's claim holds: a strategy saved with persistence ON before the crash
+        ("Boundary test") reappeared after the reload once persistence was switched on again.
+        Test data was removed afterwards.
+   Observation (LOW, wording only), FIXED at the user's request: the persistence switch itself is
+   not remembered across reloads (it is off on every page load, see Step 9), so after Reload the
+   kept strategies show only once persistence is switched on again.
+      - The fallback now reads: "No orders can be placed by this tool. Reload to start again.
+        Strategies already saved with persistence on are kept in this browser; after reloading,
+        switch persistence on again in the Charter panel to see them."
+      - Verified in the browser with the same injected render error.
+      - The boundary test asserts the hint; `node run-review-checks.cjs` still reports 141
+        checks passing.
+   Scope: as React documents, the boundary catches errors during rendering, lifecycle methods
+   and constructors. It does NOT catch errors in event handlers, async code (fetches, timers) or
+   effects outside render; those still go to the console. The app's own handlers mostly catch
+   and alert.
+   Test: 1 new check in work/claude-fix-tests.cjs (93 total). It compiles the real
+   AppErrorBoundary with the bundled Babel and checks: healthy render passes children through;
+   getDerivedStateFromError plus render show the fallback with role="alert"; the message is
+   capped at 300 characters; componentDidCatch logs "Render failure"; the Reload button calls
+   window.location.reload; a thrown non-Error string is shown too.
+   `node run-review-checks.cjs` reports 141 checks passing, plus compilation and the mocked
+   render.
+
+   Leg editor field sizes (2026-11-22, user report with screenshot: "Entry fields below Qty &
+   Price are too small"):
+   L1 [MEDIUM, UI] FIXED.
+      Cause: the leg row switched to a 12-column, one-line grid at the WINDOW breakpoint md
+      (768px). From lg (1024px) the legs panel is only lg:col-span-5 (about 446px at a 1280px
+      window), so 12 columns shared that width. Qty and Price were about 30px wide, values were
+      cut off ("1" shown for 1.09, "620.8" for 620.83), and the Action and Type selects were
+      cropped ("BU", arrow only).
+      Fix:
+      - The row now lays out by the width of the legs panel itself, using a CSS container query on
+        .leg-list:
+        - 2 per line below 400px;
+        - 4 per line from 400px, with Price and delete spanning 2;
+        - one line of 7 from 760px.
+        Browsers without container queries keep the 2-per-line layout, which always fits.
+      - Every field now has its own visible label (ACTION, QTY, TYPE, DTE, STRIKE, IV %, PRICE)
+        at every size, with explanatory titles. This replaces the desktop-only header row and the
+        mobile hover-tooltip labels; the now-unused TooltipLabel component was removed, which
+        also supersedes the M1 tooltip fix.
+      - Inputs are at least 38px tall.
+      - Action and Type selects got aria-labels.
+      - The delete button has a larger hit area and aria-label "Remove leg N" (title "Remove leg").
+      Browser (built-in pane, emulated widths):
+      - 1280px window, 446px panel: 4 per line; every field 98px (Price 167px with delete); all
+        values fit ("620.83", "1.09"); no sideways scroll.
+      - 900px window, 794px panel: one line of 7; narrowest field 76px (Qty); all values fit.
+      - 375px phone, 310px panel: 2 per line, 137px each; all values fit; no sideways scroll.
+      Checks: the S12 NumberField test's source slice was re-pointed after TooltipLabel's
+      removal. `node run-review-checks.cjs` reports 141 checks passing, plus compilation and the
+      mocked render.
+
+   OVERALL VERIFICATION STATUS (as of the end of this session):
+   - Verified in the browser: the error-boundary fallback; JSON import through the real file
+     input handler; JSON and CSV export contents; all F/S/M/D fixes listed above.
+   - Still NOT verified:
+     - the real CBOE option chain and its timestamp format (unreachable through every relay
+       today; all chain checks used synthetic data);
+     - the OS file-picker dialog itself;
+     - the browser actually saving a downloaded file to disk (downloads were captured in-page);
+     - browsers other than the Chromium-based pane;
+     - a physical phone (mobile checks used 375px emulation).
+
+======================================================================
+0. WHAT WAS RUN AND WHAT WAS NOT
+======================================================================
+Existing validation:  node run-review-checks.cjs   (Node v24.12.0)
+  - Compilation of the full React/TS source: OK
+  - Mocked render smoke test: OK
+  - Current app: 20/20 shared regression, 11/11 scenario, 17/17 priority checks pass (48 total).
+  - The original baseline prints 8 expected failures; those are baseline-only, as documented.
+
+Independent reproductions (my own harness; it extracts the real source slices from the HTML and
+runs them in node:vm, same approach as the existing tests):
+  repro.cjs in a temporary scratch folder (not part of this repository; superseded by
+  work/claude-fix-tests.cjs)
+  results: repro-results.json  (R1–R6 and R8 reproduced; R7 = control, not reproduced, as expected)
+
+Live data check (public GET for SPY only, sent directly with curl; no relays, no LLM, no project data):
+  - Yahoo chart endpoint returned JSON. This confirmed finding F6 and showed that
+    `exchangeDataDelayedBy` is missing from the response.
+  - The CBOE delayed-quotes URL returned a Cloudflare 307 and then an HTML page to curl, not JSON.
+    I could NOT verify the CBOE payload or its timestamp format. It is also possible that the
+    chain feed fails for some clients or relays. NOT verified either way.
+
+NOT verified: a full browser render, responsive layout, real file picker or download, real React
+event integration, the live relays (r.jina.ai / allorigins / codetabs), and the CBOE chain. The
+mobile findings below come from reading the code only.
+
+Severity scale: HIGH = core function broken or wrong numbers by default; MEDIUM = data loss,
+misleading output or a broken workflow in realistic use; LOW = edge cases, UX, labelling.
+
+======================================================================
+A. REPRODUCED DEFECTS
+======================================================================
+
+F1  [HIGH] Every live fetch that includes an option chain throws "symbol is not defined" (REGRESSION)
+  Lines: 722-723 (atmIvFromChain), called at 1958.
+  `atmIvFromChain` is declared at module scope but reads `symbol`. The only `symbol` binding is
+  App's useState at 1681, which this function cannot see. The script runs as a module (strict
+  mode), so it throws a ReferenceError whenever `mkt` is non-null.
+  The bug appeared in optionstrat_pro_fixed.html. work/original.html line 680 has no `symbol` check.
+  Repro (R1): run the real handleYahooFetch source inside a closure that owns `symbol`, like App,
+    with a chain payload -> price is set to 600, then the error is caught: marketError =
+    "Live fetch failed: symbol is not defined…", setIv is never called, applyStrategy is never called.
+  Browser impact (from code reading): on page load, the iron condor built at the placeholder price
+    of $450 (line 1977) is never rebuilt at the live price. currentPrice becomes the live SPY price,
+    so the default strategy is evaluated far from its strikes. The header shows "data error".
+    IV is not refreshed. Loading a new ticker does not rebuild legs, so legs from the old symbol
+    are evaluated at the new symbol's spot. The same happens on every refresh that returns a chain.
+  Why the tests missed it: work/priority-tests.cjs puts `symbol:'SPY'` in the vm global context
+    and uses `chain:null`, so atmIvFromChain is never reached and would not fail anyway.
+  Fix: pass the expected symbol in, e.g. `atmIvFromChain(mkt, price, dte, expectedSymbol)` with
+    `if (!mkt || (expectedSymbol && mkt.symbol !== expectedSymbol) || !mkt.chain) return null;`,
+    and call it as `atmIvFromChain(mkt, mkt.price, 30, sym)`. Add a test that runs without a
+    global `symbol` and with a non-null chain.
+
+F2  [HIGH] Refreshing the quote after loading a saved or imported strategy replaces the loaded legs
+  Lines: 1954-1955, 1963-1966; loadSavedStrategy 2078-2091; importStrategy 2099-2104.
+  loadSavedStrategy and import change `symbol` but never update previousSymbolRef. On the next
+  fetch for the loaded symbol, `sym !== previousSymbolRef.current` is true. applyStrategy then
+  runs with strategyType Custom, which builds the default single long ATM call, and history is
+  cleared.
+  Repro (R2): previousSymbolRef='SPY', symbol='AAPL' (state after loading a saved AAPL strategy),
+    fetch 'AAPL' -> applyStrategy('Custom') is called and setHistory([]) runs.
+  Browser steps: save a strategy on AAPL, switch to SPY, load the AAPL strategy, press refresh.
+    The saved legs are replaced by one long call. Undo is disabled, so they cannot be recovered.
+    (If F1 is still present and the chain loads, the fetch throws before the rebuild, so the bug
+    only shows once F1 is fixed or the chain is missing.)
+  Fix: in loadSavedStrategy, set `previousSymbolRef.current = saved.symbol`. More generally, only
+    rebuild when the user explicitly fetched a different ticker. Never rebuild a Custom strategy
+    silently: ask first, or push the old legs onto the undo history instead of clearing it.
+
+F3  [HIGH] One invalid persisted strategy wipes every persisted strategy
+  Lines: 1736-1755 (both persistence effects), 1744 (validation of each entry), 2067-2076 (save).
+  The UI can save strategies that validateStrategyImport rejects: zero legs (Save is always
+  enabled), more than 40 legs, leg IV over 500 (the builder has no maximum), DTE over 3650,
+  strike, premium or quantity over 100000, or an underlying price over 100000.
+  On load, `parsed.map(validateStrategyImport)` throws. The catch falls through and sets
+  storageReady=true. The save effect then runs in the same commit and overwrites localStorage
+  with the in-memory list, which is usually [].
+  Repro (R3/R3b): the four UI-creatable cases above are rejected by the loader. Simulating both
+    effects in commit order with one good and one empty stored strategy leaves localStorage as "[]".
+  Browser steps: enable persistence, save one normal strategy, then save one with no legs. Reload
+    and enable persistence again. Both strategies are gone.
+  Fix: validate each entry on its own (try/catch per entry), keep the valid ones, and keep the
+    raw string or quarantine the invalid ones instead of overwriting them. Never write until a
+    load has succeeded. Also block saving anything the importer would reject: require 1-40 legs
+    and apply the same bounds in updateLeg (iv <= 500, expiry <= 3650, and so on).
+
+F4  [MEDIUM] Turning persistence on throws away strategies saved earlier in the session
+  Line: 1744. When stored data exists, setSavedStrategies(parsed…) replaces the session list
+  instead of merging with it. The same line also resets every timestamp to Date.now() and every
+  id to stored-i, so the "saved on" date shown at 1646 becomes the reload date. (Found by code
+  reading; it follows directly from line 1744.)
+  Fix: merge by id, and keep timestamp and id from the validated record (the validator should
+  accept and bound them).
+
+F5  [MEDIUM] Switching a leg Stock -> Call/Put gives a 0-DTE, 0-IV option
+  Lines: 1395-1397. Changing the type to Stock sets expiry=0 and iv=0. Changing it back only
+  restores the strike, so the option is priced at intrinsic value only.
+  Repro (R4): Call(600, 30 DTE, 18 IV) -> Stock -> Call gives strike=600, expiry=0, iv=0, price=0.
+  The existing check "Stock to call restores valid strike" only tests strike>0 and a finite price.
+  Fix: when the type changes from Stock to an option, set expiry to 30 if it is 0 or less and iv
+  to the current IV (iv30 or App iv) if it is 0 or less, then reprice or look up the chain.
+
+F6  [MEDIUM] "prev close" and daily % change actually show a 5-trading-day change (verified live)
+  Lines: 605 (range=5d), 691 (prevClose = meta.chartPreviousClose), 2257-2262 (display).
+  With range=5d, chartPreviousClose is the close before the first bar of the window, not
+  yesterday's close.
+  Live evidence (SPY, 2026-11-22): regularMarketPrice 689.81, chartPreviousClose 754.37, while the
+    prior session close (2026-11-19) was 715.87. The app would show "prev close $754.37 (-8.56%)"
+    instead of $715.87 (-3.64%, which matches Yahoo's own regularMarketChangePercent).
+  Fix: use meta.previousClose when it is present. Otherwise use the second-to-last non-null
+  value of indicators.quote[0].close, or request range=1d. Label which one is used.
+
+F7  [MEDIUM] Untrusted relay data is not type-checked; a numeric string crashes the whole page
+  Lines: 688-697, 704-705 (getTradeData); 646-659, 669 (CBOE normalizer); crash sites such as 2173.
+  `price > 0` accepts the string "600.5", which reaches setCurrentPrice. currentPrice.toFixed()
+  then throws during render. There is no error boundary (2341), so the app goes blank.
+  CBOE bid/ask strings would also make mid NaN or a concatenated string.
+  Repro (R6): mocked relay returns regularMarketPrice:"600.5" -> price "600.5" (string), and
+    .toFixed throws a TypeError.
+  The charter itself says relayed data is untrusted (line 190). This is a realistic failure if a
+  relay changes format.
+  Fix: coerce and validate every numeric field (Number.isFinite, plausible range) in getTradeData
+  and normalizeCboeOptions, and drop or flag anything invalid. Add a top-level React error boundary.
+
+F8  [LOW] Provenance labels are wrong for stock legs and missing for hedge legs
+  Line 1397 (with 1394): Call->Stock sets the price to spot, but the label says 'Theoretical
+    model' (R5 reproduced).
+  Lines 1774/1780: template stock legs are also labelled 'Theoretical model'. The price is the
+    underlying quote, which may be market, manual or LLM-derived.
+  Lines 2057-2064: delta-hedge stock legs have no premiumSource, so they show
+    'Unknown / legacy premium'.
+  Fix: label stock entries with the underlying source, e.g. `Underlying: ${underlyingSource}`,
+  plus its quote timestamp.
+
+======================================================================
+B. SUSPECTED ISSUES (code review; not reproduced end to end)
+======================================================================
+
+S1  [MEDIUM] Strategies store relative DTE, so saved and imported strategies never age
+  Lines 2073, 1096, 1389. Legs store `expiry` as days-to-expiry. A strategy saved at 30 DTE and
+  loaded a week later is still modelled at 30 DTE, which overstates time value. Entry premiums
+  and timestamps are then inconsistent with the time remaining.
+  Fix: store an absolute expiry date (epoch) per leg and derive DTE at render time, or at least
+  subtract the days elapsed since the strategy's timestamp on load and warn.
+
+S2  [MEDIUM] CBOE timestamps are probably parsed in the wrong timezone or as Invalid Date
+  Lines 653, 672, 1944, 1456, 2202, 2205. `new Date(json.timestamp)` is used for the chain
+  timestamp and the per-leg quote timestamp. If CBOE still sends "YYYY-MM-DD HH:MM:SS" (Eastern
+  time, no offset), Chrome reads it as the viewer's local time and Safari may return Invalid Date.
+  When Yahoo has no regularMarketTime, the CBOE string is also used as the underlying quote
+  timestamp (1944). NOT verified, because the CBOE endpoint returned HTML to curl.
+  Fix: parse it explicitly as America/New_York, and show "Unavailable" when parsing fails.
+
+S3  [MEDIUM] The governance text contradicts actual data flows
+  FORBIDDEN_ACTIONS (line 203) says the app never sends "saved strategies, symbols or settings to
+  any third-party service". But every quote fetch sends the symbol to third-party relays
+  (576-581: r.jina.ai, allorigins, codetabs). The optional LLM code generator sends symbol, legs
+  and model to Gemini (735-751). This is a documentation and policy defect, not a calculation
+  bug, but it matters for a "governed" tool.
+  Fix: reword the rule, e.g. "except the ticker sent to the listed public relays and data sent
+  to the user-enabled LLM", or route requests through a first-party proxy.
+
+S4  [LOW] The external-call counter is inaccurate
+  Line 1934 adds 2 only on success and only for the newest request. It also adds 2 on 45-second
+  cache hits, when no network request is made. Each fetchViaRelay call can try up to 4 relays,
+  and failed or superseded attempts are never counted. The governance panel (907-910) presents
+  this as "External Calls This Session".
+  Fix: count inside fetchViaRelay, once per actual fetch attempt.
+
+S5  [LOW] Undo is enabled at startup and clears every leg
+  Lines 1692, 1976-1978. setLegs pushes the `rawLegs` captured in its closure. The initial
+  applyStrategy pushes [], and handleYahooFetch, which uses the same mount-time closure, pushes
+  [] again. Clicking "Undo leg edit" right after load therefore empties the strategy. The same
+  stale-closure pattern means async setLegs calls record a history entry that may not be the
+  state they replace.
+  Fix: use functional updates, `setRawLegs(prev => { setHistory(h => [...h.slice(-29), prev]); return next(prev); })`,
+  or keep history in a reducer. Clear history after the initial build.
+
+S6  [LOW] Typing in the ticker field silently cancels a pending LLM price verification
+  Lines 2147 and 2008. Each keystroke calls invalidateQuote(). A later "Accept & Update Price"
+  just closes the modal with no message.
+  Fix: show "Verification expired because the ticker changed", or invalidate only on fetch.
+
+S7  [LOW] Expirations and DTE around the expiry day
+  Line 618 uses 20:00 UTC as the expiry time, which is 3 pm ET while EST is in effect (it is
+  November). Same-day expirations are dropped an hour early. Line 664 rounds DTE, so contracts
+  with less than about 0.5 days left show 0 DTE. Added through addChainLeg (1915) or
+  enrichment (1877), they are valued at intrinsic only while the entry premium is the mid, which
+  shows an immediate modelled loss. impliedVolFromPrice also returns null for T <= 0.001 (624).
+  Fix: use the exchange close in America/New_York, and keep fractional DTE for the model.
+
+S8  [LOW] Chain enrichment mixes provenance and prices from different contracts
+  Lines 1874-1880. When the snapped contract has no usable price, the leg keeps the theoretical
+  price calculated for the un-snapped strike and expiry, but takes the snapped strike and expiry
+  and the CBOE quoteTimestamp. The label stays 'Theoretical model' next to a CBOE time.
+  Fix: reprice theoretically at the snapped strike and DTE, and only copy quoteTimestamp when a
+  chain price is used.
+
+S9  [LOW] Back-solved IV ignores the shared rate and dividend assumptions
+  Lines 623-634 and 712-714 use a hard-coded r = 0.05 and no dividend yield (bsCall/bsPut without
+  q). The model that later reprices these legs uses model.rate and model.dividend, so T+0 P/L is
+  not zero even with unchanged inputs.
+  Fix: pass model.rate and model.dividend into impliedVolFromPrice and price through
+  calculateOptionPrice.
+
+S10 [LOW] Option chain shading marks puts as in the money when they are out of the money
+  Lines 1583-1585 shade the whole row when strike <= spot and set the title "In the money". That
+  is true for calls but false for puts. Fix: shade each side on its own.
+
+S11 [LOW] Mobile and keyboard access to saved-strategy actions
+  Line 1650: the Export JSON and Delete buttons use `opacity-0 group-hover:opacity-100`. They are
+  invisible on touch devices and when reached by keyboard focus. TooltipLabel (1364-1371) is also
+  hover-only. Fix: show them always on small screens, and add `focus-within:opacity-100`.
+  (Static review only; layout not checked in a browser.)
+
+S12 [LOW] Number inputs snap while typing
+  Lines 1388-1395 and 2209. Clearing a strike field immediately resets the strike to spot and
+  reprices. Clearing quantity resets it to 1. Clearing a model field sets it to 0. Typing a new
+  value therefore causes visible repricing and changes provenance to Manual or Theoretical.
+  Fix: keep the input text as a draft string and commit it on blur or Enter when it is valid.
+
+S13 [LOW] Smaller items
+  - Line 504: the LLM price regex needs cents and ignores thousands separators, so "$1,234.56"
+    is read as 234.56 and "$580" is missed. The human verification gate reduces the impact.
+  - Line 1456: Duplicate uses crypto.randomUUID, which does not exist outside secure contexts
+    (for example http on a LAN IP), so it would throw there. Use the existing Math.random id helper.
+  - Line 2178: the header shows the retrieval time next to "Yahoo + CBOE delayed", which can be
+    read as the quote time. It also says "manual/quote" when a Yahoo quote loaded without a chain.
+  - Lines 704 and 695: if Yahoo returns a quote object with a null price, the CBOE price is used
+    but source and timestamp still name Yahoo.
+  - Line 1935: dataRelay shows whichever relay succeeded last, which may be the chain's relay,
+    and also on cache hits.
+  - Lines 2057-2065: Hedge goes through App's setLegs, so strategyType keeps its template name
+    while a stock leg is added.
+  - work/color-regression.cjs: `process.exitCode=1` only fires for files containing "fixed", so
+    it never fires. run-review-checks.cjs compensates by reading the JSON.
+
+======================================================================
+C. MODELING LIMITATIONS (documented or deliberate; not defects)
+======================================================================
+L1  Round-trip costs are charged even when an option expires worthless or is cash-settled (385;
+    disclosed at 2210). R8: a long call expiring worthless shows -$901.30 for a $900 premium with
+    a $0.65 commission per side. Exercise and assignment fees are not modelled.
+L2  Stock dividend cashflows are excluded (321; disclosed at 2210). Options use a continuous yield,
+    so a covered call ignores the discrete dividend and early-exercise risk.
+L3  European Black-Scholes with flat per-leg IV. The IV shift is additive in vol points. No
+    American early exercise, no skew dynamics.
+L4  Calendar / mixed-expiry metrics are grid estimates at the first expiry (419-425) and are
+    labelled approximate (1049). Breakevens beyond the sampled range are not extended in the
+    approximate case (444).
+L5  Trade comparison (1100-1116) always replaces every leg IV with one absolute IV. The default
+    is a fixed 20%, not tied to the current IV, and the comparison cannot use each leg's own IV.
+    So A and B under "same assumptions" can differ from what the builder chart shows for B.
+    This matches priority 2 (common absolute IV). Consider defaulting to the current IV and
+    adding a "use each leg's IV" option.
+L6  Fractional option contracts are allowed (1388, 1097: minimum 0.01).
+L7  The comparison and scenario grids cover a fixed ±10% and ±20% of spot.
+L8  No probability estimates are shown (2251), as required. Distribution assumptions and calendar
+    behavior have NOT been validated by me either.
+
+======================================================================
+D. AREAS REVIEWED WITH NO DEFECT FOUND
+======================================================================
+- Dividend-adjusted Black-Scholes and Greeks (319-357): put-call parity holds. Delta and theta
+  for a dividend-paying put match finite differences to about 1e-5 (R7, limited by the A&S cdf).
+  Gamma and vega scaling under the e^(-qT) substitution are correct. The zero-IV, zero-spot and
+  zero-strike boundaries are finite and correct, including the zero-IV ITM theta.
+- Same-expiry max profit, max loss and breakevens (416-448): every strike is sampled, so narrow
+  spreads and butterflies are exact. The analytic tail breakeven and Unlimited detection are
+  correct for long/short stock and calls.
+- Entry premiums stay fixed when rate, dividend or cost assumptions change. The model is attached
+  at render time (1691), and comparisonRows overrides each leg's model and IV with the shared ones.
+- The comparison is limited to the earliest expiry across both A and B (1105-1107).
+- Out-of-order quote responses and invalidation by ticker typing, saved load or manual price are
+  handled through requestVersion (1928, 1933, 1968, 2009, 2027, 2083).
+- An LLM result is applied only after the checkbox gate, and only when the ticket and symbol
+  still match (2007-2012). Accepting clears the market chain and labels the source as
+  "Human-verified LLM suggestion".
+- Import validation (1084-1099): the file size cap (2101), enums, numeric bounds and the symbol
+  pattern are enforced. Imported premiums are relabelled "Imported / unverified". Names are
+  rendered as escaped text (React).
+- Scenario CSV (1131-1133): header plus 7 rows, numeric only, so there is no formula injection.
+- Chart shading splits exactly at breakevens. Per-leg curves sum to the total (existing tests confirmed).
+
+======================================================================
+E. SUGGESTED ORDER OF FIXES
+======================================================================
+1. F1 (one-line scope fix plus a test without a global `symbol`). Without it, the live path is broken.
+2. F2 and F3 (silent loss of user strategies).
+3. F7 (validate relay data, add an error boundary) and F6 (wrong previous close).
+4. F5, S1, S2 (pricing inputs and time).
+5. The remaining LOW items.
+Re-run node run-review-checks.cjs plus the R1-R6 reproductions after each change, then do one
+real browser pass (desktop and 375px wide) before claiming the UI works.
